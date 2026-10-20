@@ -45,6 +45,43 @@ jmethodID jclass_ByteBuffer_allocateDirect = nullptr;
 
 static bool done = false;
 
+// ===================== ЕДИНЫЙ ДАТАЦЕНТР (настройка) =====================
+// Оставляем только один датацентр (по умолчанию DC2) и задаём для него свои адреса.
+// Можно указать домен — тогда IP под капотом меняется через DNS (или /etc/hosts на устройстве),
+// клиент подхватит новый IP при следующем подключении.
+// Можно указать и прямой IP — тогда адрес фиксированный.
+// Меняй значения в kCustomDcAddresses — это адреса, куда клиент будет подключаться.
+static const uint32_t kForcedDatacenterId = 2;
+
+struct CustomDcAddress {
+    const char *address;
+    uint16_t port;
+};
+
+static const CustomDcAddress kCustomDcAddresses[] = {
+    {"dc.sandytap.ru", 2398},   // домен: IP меняется под капотом
+    // {"149.154.167.51", 443},   // либо жёсткий IP
+};
+// =========================================================================
+
+// Заполняет списки адресов датацентра только нашими кастомными адресами
+static void applyCustomDcAddresses(Datacenter *datacenter) {
+    if (datacenter == nullptr) {
+        return;
+    }
+    std::vector<TcpAddress> addresses, addressesDownload, empty;
+    for (auto & custom : kCustomDcAddresses) {
+        addresses.emplace_back(custom.address, custom.port, 0, "");
+        addressesDownload.emplace_back(custom.address, custom.port, 0, "");
+    }
+    datacenter->replaceAddresses(addresses, 0);          // ipv4
+    datacenter->replaceAddresses(empty, 1);               // ipv6
+    datacenter->replaceAddresses(addressesDownload, 2);   // ipv4 (download)
+    datacenter->replaceAddresses(empty, 3);               // ipv6 (download)
+    datacenter->setUseAddressPort(true);                   // всегда наш порт, без 443/5222
+    datacenter->resetAddressAndPortNum();
+}
+
 ConnectionsManager::ConnectionsManager(int32_t instance) {
     instanceNum = instance;
     if ((epolFd = epoll_create(128)) == -1) {
@@ -1817,64 +1854,29 @@ uint8_t ConnectionsManager::getIpStratagy() {
 }
 
 void ConnectionsManager::initDatacenters() {
+    // Единый датацентр: удаляем все остальные и оставляем только kForcedDatacenterId
+    // (объекты не delete'им — как и в оригинальном коде, чтобы не сломать активные соединения)
+    for (auto it = datacenters.begin(); it != datacenters.end();) {
+        if (it->first != kForcedDatacenterId) {
+            it = datacenters.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     Datacenter *datacenter;
-    if (!testBackend) {
-        if (datacenters.find(1) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 1);
-            datacenter->addAddressAndPort("149.154.175.50", 443, 0, "");
-            datacenter->addAddressAndPort("2001:b28:f23d:f001:0000:0000:0000:000a", 443, 1, "");
-            datacenters[1] = datacenter;
-        }
+    if (datacenters.find(kForcedDatacenterId) == datacenters.end()) {
+        datacenter = new Datacenter(instanceNum, kForcedDatacenterId);
+        datacenters[kForcedDatacenterId] = datacenter;
+    }
+    datacenter = datacenters[kForcedDatacenterId];
 
-        if (datacenters.find(2) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 2);
-            datacenter->addAddressAndPort("149.154.167.51", 443, 0, "");
-            datacenter->addAddressAndPort("95.161.76.100", 443, 0, "");
-            datacenter->addAddressAndPort("2001:67c:4e8:f002:0000:0000:0000:000a", 443, 1, "");
-            datacenters[2] = datacenter;
-        }
+    // Наши собственные IP/порты
+    applyCustomDcAddresses(datacenter);
 
-        if (datacenters.find(3) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 3);
-            datacenter->addAddressAndPort("149.154.175.100", 443, 0, "");
-            datacenter->addAddressAndPort("2001:b28:f23d:f003:0000:0000:0000:000a", 443, 1, "");
-            datacenters[3] = datacenter;
-        }
-
-        if (datacenters.find(4) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 4);
-            datacenter->addAddressAndPort("149.154.167.91", 443, 0, "");
-            datacenter->addAddressAndPort("2001:67c:4e8:f004:0000:0000:0000:000a", 443, 1, "");
-            datacenters[4] = datacenter;
-        }
-
-        if (datacenters.find(5) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 5);
-            datacenter->addAddressAndPort("149.154.171.5", 443, 0, "");
-            datacenter->addAddressAndPort("2001:b28:f23f:f005:0000:0000:0000:000a", 443, 1, "");
-            datacenters[5] = datacenter;
-        }
-    } else {
-        if (datacenters.find(1) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 1);
-            datacenter->addAddressAndPort("149.154.175.40", 443, 0, "");
-            datacenter->addAddressAndPort("2001:b28:f23d:f001:0000:0000:0000:000e", 443, 1, "");
-            datacenters[1] = datacenter;
-        }
-
-        if (datacenters.find(2) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 2);
-            datacenter->addAddressAndPort("149.154.167.40", 443, 0, "");
-            datacenter->addAddressAndPort("2001:67c:4e8:f002:0000:0000:0000:000e", 443, 1, "");
-            datacenters[2] = datacenter;
-        }
-
-        if (datacenters.find(3) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 3);
-            datacenter->addAddressAndPort("149.154.175.117", 443, 0, "");
-            datacenter->addAddressAndPort("2001:b28:f23d:f003:0000:0000:0000:000e", 443, 1, "");
-            datacenters[3] = datacenter;
-        }
+    // Текущий датацентр тоже должен быть нашим
+    if (currentDatacenterId != 0 && currentDatacenterId != kForcedDatacenterId) {
+        currentDatacenterId = kForcedDatacenterId;
     }
 }
 
@@ -2484,6 +2486,10 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
             }
             datacenterId = currentDatacenterId;
         }
+        // Единый датацентр: любой запрос к другому DC отправляем в наш DC
+        if (getDatacenterWithId(datacenterId) == nullptr) {
+            datacenterId = kForcedDatacenterId;
+        }
         if ((request->requestFlags & RequestFlagResendAfter) != 0) {
             hasInvokeWaitMessage = true;
             if (hasInvokeAfterMessage) {
@@ -2795,7 +2801,12 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
                 }
                 uint8_t index;
                 RAND_bytes(&index, 1);
-                datacenterId = allDc[index % allDc.size()];
+                if (allDc.empty()) {
+                    // Единый датацентр — переключаться не на что
+                    datacenterId = kForcedDatacenterId;
+                } else {
+                    datacenterId = allDc[index % allDc.size()];
+                }
                 if (dynamic_cast<TL_help_getConfig *>(request->rawRequest)) {
                     updatingDcStartTime = currentTime;
                     request->datacenterId = datacenterId;
@@ -2806,6 +2817,11 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
         }
 
         Datacenter *requestDatacenter = getDatacenterWithId(datacenterId);
+        if (requestDatacenter == nullptr) {
+            // Единый датацентр: неизвестный DC -> наш DC
+            requestDatacenter = getDatacenterWithId(kForcedDatacenterId);
+            datacenterId = kForcedDatacenterId;
+        }
         if (requestDatacenter == nullptr) {
             if (std::find(unknownDatacenterIds.begin(), unknownDatacenterIds.end(), datacenterId) == unknownDatacenterIds.end()) {
                 unknownDatacenterIds.push_back(datacenterId);
@@ -3461,16 +3477,16 @@ void ConnectionsManager::updateDcSettings(uint32_t dcNum, bool workaround, bool 
 
             if (!map.empty()) {
                 for (auto & iter : map) {
+                    // Единый датацентр: адреса от сервера игнорируем, свои не трогаем
+                    if (iter.first != kForcedDatacenterId) {
+                        continue;
+                    }
                     Datacenter *datacenter = getDatacenterWithId(iter.first);
-                    DatacenterInfo *info = iter.second.get();
                     if (datacenter == nullptr) {
                         datacenter = new Datacenter(instanceNum, iter.first);
                         datacenters[iter.first] = datacenter;
                     }
-                    datacenter->replaceAddresses(info->addressesIpv4, info->isCdn ? 8 : 0);
-                    datacenter->replaceAddresses(info->addressesIpv6, info->isCdn ? 9 : 1);
-                    datacenter->replaceAddresses(info->addressesIpv4Download, info->isCdn ? 10 : 2);
-                    datacenter->replaceAddresses(info->addressesIpv6Download, info->isCdn ? 11 : 3);
+                    applyCustomDcAddresses(datacenter);
                     if (iter.first == movingToDatacenterId) {
                         movingToDatacenterId = DEFAULT_DATACENTER_ID;
                         moveToDatacenter(iter.first);
@@ -3494,6 +3510,10 @@ void ConnectionsManager::updateDcSettings(uint32_t dcNum, bool workaround, bool 
 }
 
 void ConnectionsManager::moveToDatacenter(uint32_t datacenterId) {
+    // Единый датацентр: миграцию делаем только в свой DC
+    if (datacenterId != kForcedDatacenterId) {
+        datacenterId = kForcedDatacenterId;
+    }
     if (movingToDatacenterId == datacenterId) {
         return;
     }
@@ -3547,13 +3567,13 @@ void ConnectionsManager::authorizedOnMovingDatacenter() {
 
 void ConnectionsManager::applyDatacenterAddress(uint32_t datacenterId, std::string ipAddress, uint32_t port) {
     scheduleTask([&, datacenterId, ipAddress, port] {
+        // Единый датацентр: адрес от сервера не применяем, оставляем свои
+        if (datacenterId != kForcedDatacenterId) {
+            return;
+        }
         Datacenter *datacenter = getDatacenterWithId(datacenterId);
         if (datacenter != nullptr) {
-            std::vector<TcpAddress> addresses;
-            addresses.emplace_back(ipAddress, port, 0, "");
-            datacenter->suspendConnections(true);
-            datacenter->replaceAddresses(addresses, 0);
-            datacenter->resetAddressAndPortNum();
+            applyCustomDcAddresses(datacenter);
             saveConfig();
             if (datacenter->isHandshakingAny()) {
                 datacenter->beginHandshake(HandshakeTypeCurrent, true);

@@ -87,6 +87,89 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         proxySecret = &ConnectionsManager::getInstance(instanceNum).proxySecret;
     }
 
+    // Если в адресе датацентра указан домен — резолвим его в IP.
+    // IP можно менять под капотом (DNS/hosts), клиент подхватит его при следующем подключении.
+    {
+        struct in_addr testAddr4;
+        struct in6_addr testAddr6;
+        bool addressIsIp = false;
+        if (inet_pton(AF_INET, address.c_str(), &testAddr4) == 1) {
+            addressIsIp = true;
+            ipv6 = false;
+        } else if (inet_pton(AF_INET6, address.c_str(), &testAddr6) == 1) {
+            addressIsIp = true;
+            ipv6 = true;
+        }
+        if (!addressIsIp) {
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) address %s is a domain, resolving...", this, address.c_str());
+            bool useDelegate = false;
+#if DC_RESOLVE_VIA_DELEGATE
+            useDelegate = proxyAddress->empty() && ConnectionsManager::getInstance(instanceNum).delegate != nullptr;
+#endif
+            if (useDelegate) {
+                // Асинхронное резолвинг через DoH-делегат Telegram
+                if ((socketFd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+                    if (LOGS_ENABLED) DEBUG_E("connection(%p) can't create socket", this);
+                    closeSocket(1, -1);
+                    return;
+                }
+                socketAddress.sin_family = AF_INET;
+                socketAddress.sin_port = htons(port);
+                ipv6 = false;
+                isIpv6 = false;
+                waitingForHostResolve = address;
+                ConnectionsManager::getInstance(instanceNum).delegate->getHostByName(address, instanceNum, this);
+                return;
+            }
+            // Системный DNS (getaddrinfo): локальный DNS / /etc/hosts
+            struct addrinfo hints;
+            memset(&hints, 0, sizeof(hints));
+            hints.ai_family = AF_UNSPEC;
+            hints.ai_socktype = SOCK_STREAM;
+            struct addrinfo *result = nullptr;
+            if (getaddrinfo(address.c_str(), nullptr, &hints, &result) != 0 || result == nullptr) {
+                if (result != nullptr) {
+                    freeaddrinfo(result);
+                }
+                if (LOGS_ENABLED) DEBUG_E("connection(%p) can't resolve host %s address", this, address.c_str());
+                closeSocket(1, -1);
+                return;
+            }
+            char resolved[INET6_ADDRSTRLEN];
+            bool resolvedIsIpv6 = false;
+            bool found = false;
+            for (struct addrinfo *item = result; item != nullptr; item = item->ai_next) {
+                if (item->ai_family == AF_INET) {
+                    inet_ntop(AF_INET, &((struct sockaddr_in *) item->ai_addr)->sin_addr, resolved, sizeof(resolved));
+                    resolvedIsIpv6 = false;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                for (struct addrinfo *item = result; item != nullptr; item = item->ai_next) {
+                    if (item->ai_family == AF_INET6) {
+                        inet_ntop(AF_INET6, &((struct sockaddr_in6 *) item->ai_addr)->sin6_addr, resolved, sizeof(resolved));
+                        resolvedIsIpv6 = true;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            freeaddrinfo(result);
+            if (!found) {
+                if (LOGS_ENABLED) DEBUG_E("connection(%p) can't resolve host %s address", this, address.c_str());
+                closeSocket(1, -1);
+                return;
+            }
+            address = resolved;
+            currentAddress = address;
+            ipv6 = resolvedIsIpv6;
+            isIpv6 = resolvedIsIpv6;
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) resolved host %s address %s", this, address.c_str(), resolved);
+        }
+    }
+
     if (!proxyAddress->empty()) {
         if (LOGS_ENABLED) DEBUG_D("connection(%p) connecting via proxy %s:%d secret[%d]", this, proxyAddress->c_str(), proxyPort, (int) proxySecret->size());
         if ((socketFd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -159,7 +242,25 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             }
         }
     } else {
-        proxyAuthState = 0;
+        uint32_t tempBuffLength;
+        if (secret.size() > 17 && secret[0] == '\xee') {
+            proxyAuthState = 10;
+            currentSecret = secret.substr(1, 16);
+            currentSecretDomain = secret.substr(17);
+            tempBuffLength = 65 * 1024;
+        } else {
+            proxyAuthState = 0;
+            tempBuffLength = 0;
+        }
+        if (tempBuffLength > 0) {
+            if (tempBuffer == nullptr || tempBuffer->length < tempBuffLength) {
+                if (tempBuffer != nullptr) {
+                    delete tempBuffer;
+                }
+                tempBuffer = new ByteArray(tempBuffLength);
+            }
+        }
+
         if ((socketFd = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0)) < 0) {
             if (LOGS_ENABLED) DEBUG_E("connection(%p) can't create socket", this);
             closeSocket(1, -1);
@@ -180,24 +281,6 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
                 if (LOGS_ENABLED) DEBUG_E("connection(%p) bad ipv4 %s", this, address.c_str());
                 closeSocket(1, -1);
                 return;
-            }
-        }
-        uint32_t tempBuffLength;
-        if (secret.size() > 17 && secret[0] == '\xee') {
-            proxyAuthState = 10;
-            currentSecret = secret.substr(1, 16);
-            currentSecretDomain = secret.substr(17);
-            tempBuffLength = 65 * 1024;
-        } else {
-            proxyAuthState = 0;
-            tempBuffLength = 0;
-        }
-        if (tempBuffLength > 0) {
-            if (tempBuffer == nullptr || tempBuffer->length < tempBuffLength) {
-                if (tempBuffer != nullptr) {
-                    delete tempBuffer;
-                }
-                tempBuffer = new ByteArray(tempBuffLength);
             }
         }
     }

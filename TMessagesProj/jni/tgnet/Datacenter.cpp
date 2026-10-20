@@ -335,6 +335,10 @@ int32_t Datacenter::getCurrentPort(uint32_t flags) {
     }
     TcpAddress *address = &((*addresses) [currentAddressNum]);
     int32_t port;
+    if (useAddressPort) {
+        // Кастомный порт из адреса (свой DC): не переключаемся на 443/5222
+        return address->port;
+    }
     if (!address->secret.empty()) {
         port = -1;
     } else {

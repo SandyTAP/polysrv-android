@@ -30,6 +30,11 @@
 #define MAX_ACCOUNT_COUNT 5
 #define USE_DELEGATE_HOST_RESOLVE
 
+// Как резолвить домен в адресе датацентра:
+// 0 — системным DNS (getaddrinfo: локальный DNS / /etc/hosts, можно менять IP под капотом),
+// 1 — через DoH-делегат Telegram (https://dns.google/resolve, кэш 5 минут)
+#define DC_RESOLVE_VIA_DELEGATE 0
+
 #define USE_IPV4_ONLY 0
 #define USE_IPV6_ONLY 1
 #define USE_IPV4_IPV6_RANDOM 2
