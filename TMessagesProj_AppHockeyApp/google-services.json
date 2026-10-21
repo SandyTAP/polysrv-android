@@ -97,7 +97,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:760348033671:android:f6afd7b67eae3860",
         "android_client_info": {
-          "package_name": "ru.sandydev.telegram"
+          "package_name": "com.sandydev.sumegram"
         }
       },
       "oauth_client": [
@@ -126,7 +126,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:760348033671:android:f6afd7b67eae3860",
         "android_client_info": {
-          "package_name": "ru.sandydev.telegram.beta"
+          "package_name": "com.sandydev.sumegram.beta"
         }
       },
       "oauth_client": [
@@ -155,7 +155,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:760348033671:android:f6afd7b67eae3860",
         "android_client_info": {
-          "package_name": "ru.sandydev.telegram.web"
+          "package_name": "com.sandydev.sumegram.web"
         }
       },
       "oauth_client": [
